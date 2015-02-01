@@ -11,5 +11,9 @@ Zepto源码学习. Zepto Learning Notes. (zh-CN)
 
 `src-notes`为带个人注释的源码文件.
 
+基础结构图
+
+![preview](https://raw.githubusercontent.com/mc-zone/learning-Zepto/master/files/preview.jpg)
+
 
 
