@@ -13,11 +13,9 @@ var Zepto = (function() {
     elementDisplay = {},
     //class name 正则公式缓存
     classCache = {},
-    //TODO 变化的终点？
     //此集中的css数值不需要加px
     cssNumber = { 'column-count': 1, 'columns': 1, 'font-weight': 1, 'line-height': 1,'opacity': 1, 'z-index': 1, 'zoom': 1 },
     //fragment 正则
-    //TODO 哪里使用?
     fragmentRE = /^\s*<(\w+|!)[^>]*>/,
     //判断单标签正则
     singleTagRE = /^<(\w+)\s*\/?>(?:<\/\1>|)$/,
@@ -35,7 +33,7 @@ var Zepto = (function() {
     //预创建一批元素
     table = document.createElement('table'),
     tableRow = document.createElement('tr'),
-    //TODO 设置元素的默认容器
+    //部分元素的默认容器
     containers = {
       'tr': document.createElement('tbody'),
       'tbody': table, 'thead': table, 'tfoot': table,
@@ -84,16 +82,20 @@ var Zepto = (function() {
                           element.oMatchesSelector || element.matchesSelector
     if (matchesSelector) return matchesSelector.call(element, selector)
     // fall back to performing a selector:
-    //TODO 没有内置matchSelector时的处理 
+    //没有内置matchSelector时的处理 
     var match, parent = element.parentNode, temp = !parent
+    //没有父节点，使用临时div
     if (temp) (parent = tempParent).appendChild(element)
+    //使用qsa选择出匹配元素,取element在其中的索引,~按位非(即-1时为0, 0时为-1, 1时为-2)
+    //TODO 使用~按位非的目的
     match = ~zepto.qsa(parent, selector).indexOf(element)
+    //清空tempParent(临时div)
     temp && tempParent.removeChild(element)
     return match
   }
 
   //返回对象类型。空值(undefined null)时返回其string格式，否则返回class2type中的记录，或'object'
-  //TODO class2type中的值在哪里初始化？
+  //class2type中的值在 @tag:1 处初始化
   function type(obj) {
     return obj == null ? String(obj) :
       class2type[toString.call(obj)] || "object"
@@ -116,7 +118,11 @@ var Zepto = (function() {
 
   //去除数组中空值(null与undefined)
   function compact(array) { return filter.call(array, function(item){ return item != null }) }
-  //TODO 这个flatten的意义
+  /*
+   * 扁平化二维数组
+   * 只对二维以下数组有效
+   * 通过apply方法使得array被作为arguments传入concat,contact可对数组或单个元素进行数组连接
+   */
   function flatten(array) { return array.length > 0 ? $.fn.concat.apply([], array) : array }
 
   //中划线转驼峰
@@ -523,6 +529,7 @@ var Zepto = (function() {
   if (window.JSON) $.parseJSON = JSON.parse
 
   // 类型判断map的填充
+  // @tag:1
   // Populate the class2type map
   $.each("Boolean Number String Function Array Date RegExp Object Error".split(" "), function(i, name) {
     class2type[ "[object " + name + "]" ] = name.toLowerCase()
@@ -898,16 +905,17 @@ var Zepto = (function() {
      * css的get/set
      * get first, set all
      * get时可传入数组，将返回key-val对象
+     * 默认使用getComputedStyle查询style
      * set时可传入key-val对象
-     * TODO 详细
      */
     css: function(property, value){
       if (arguments.length < 2) {
-        var computedStyle, element = this[0]
+        var computedStyle, element = this[0] //只对第一个元素取值
         if(!element) return
         computedStyle = getComputedStyle(element, '')
         if (typeof property == 'string')
           return element.style[camelize(property)] || computedStyle.getPropertyValue(property)
+        //支持获取一组css属性值
         else if (isArray(property)) {
           var props = {}
           $.each(property, function(_, prop){
@@ -917,13 +925,17 @@ var Zepto = (function() {
         }
       }
 
+      //set
       var css = ''
       if (type(property) == 'string') {
+        //value 为 ""/false/null，即删除此css
         if (!value && value !== 0)
           this.each(function(){ this.style.removeProperty(dasherize(property)) })
         else
+          //构造css set表达式
           css = dasherize(property) + ":" + maybeAddPx(property, value)
       } else {
+        //多个prop
         for (key in property)
           if (!property[key] && property[key] !== 0)
             this.each(function(){ this.style.removeProperty(dasherize(key)) })
