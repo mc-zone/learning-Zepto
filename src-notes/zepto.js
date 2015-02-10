@@ -28,7 +28,7 @@ var Zepto = (function() {
     // special attributes that should be get/set via method calls
     methodAttributes = ['val', 'css', 'html', 'text', 'data', 'width', 'height', 'offset'],
 
-    //插入操作
+    //插入操作。顺序有要求。详见@tag:2
     adjacencyOperators = [ 'after', 'prepend', 'before', 'append' ],
     //预创建一批元素
     table = document.createElement('table'),
@@ -153,16 +153,22 @@ var Zepto = (function() {
     return (typeof value == "number" && !cssNumber[dasherize(name)]) ? value + "px" : value
   }
 
-  //判断默认display属性.为none时默认应为block
-  //存入elementDisplay缓存
-  //TODO 使用机制?
+  /*
+   * 判断显示元素时应该使用的display属性
+   * 存入elementDisplay缓存
+   * 目前只有.show()中用到
+   * TODO 可能是为了某些情况下的hack
+   */
   function defaultDisplay(nodeName) {
     var element, display
     if (!elementDisplay[nodeName]) {
+      //尝试插入此类元素到文档中查看其默认display属性
       element = document.createElement(nodeName)
       document.body.appendChild(element)
       display = getComputedStyle(element, '').getPropertyValue("display")
       element.parentNode.removeChild(element)
+      //如果display:none则使用block
+      //TODO 何时出现？暂时只想到 <template>
       display == "none" && (display = "block")
       elementDisplay[nodeName] = display
     }
@@ -396,7 +402,7 @@ var Zepto = (function() {
     }
 
   /*
-   * zepto方法中的常用方法。对参数类型进行判断和执行
+   * zepto方法中的常用方法。对参数类型进行判断处理
    * 如果arg(一般为用户传入)是function，则返回调用function的结果，否则直接返回arg
    */
   
@@ -720,7 +726,9 @@ var Zepto = (function() {
     //显示所有元素(把display置空或恢复)
     show: function(){
       return this.each(function(){
+        //如果display为none时改为空
         this.style.display == "none" && (this.style.display = '')
+        //如果还是使用none(默认是none)，去defaultDisplay中找默认值
         if (getComputedStyle(this, '').getPropertyValue("display") == "none")
           this.style.display = defaultDisplay(this.nodeName)
       })
@@ -877,6 +885,7 @@ var Zepto = (function() {
      * offset的get/set 
      * get first ,set all
      * 返回 相对于document的left top width height
+     * get时使用getBoundingClientRect()
      * set时可传入function依据每个元素的oldOffset得出设置return
      */
     offset: function(coordinates){
@@ -895,7 +904,7 @@ var Zepto = (function() {
       if (!this.length) return null
       var obj = this[0].getBoundingClientRect()
       return {
-        left: obj.left + window.pageXOffset,
+        left: obj.left + window.pageXOffset,//加上偏移位置
         top: obj.top + window.pageYOffset,
         width: Math.round(obj.width),
         height: Math.round(obj.height)
@@ -1007,17 +1016,24 @@ var Zepto = (function() {
         })
       })
     },
+
     /*
-     * 设置所有元素的滚动距离
+     * 获取第一个元素的Y轴滚动距离
+     * 或设置所有元素的Y轴滚动距离
+     * 元素具有scrollTop属性时用之，否则使用pageYOffset获取，使用scrollTo()设置
      */
     scrollTop: function(value){
       if (!this.length) return
       var hasScrollTop = 'scrollTop' in this[0]
       if (value === undefined) return hasScrollTop ? this[0].scrollTop : this[0].pageYOffset
+      //set
       return this.each(hasScrollTop ?
         function(){ this.scrollTop = value } :
         function(){ this.scrollTo(this.scrollX, value) })
     },
+    /*
+     * X轴滚动距离.方法同上
+     */
     scrollLeft: function(value){
       if (!this.length) return
       var hasScrollLeft = 'scrollLeft' in this[0]
@@ -1072,14 +1088,22 @@ var Zepto = (function() {
   //width 和 height 方法
   // Generate the `width` and `height` functions
   ;['width', 'height'].forEach(function(dimension){
+    //首字母转大写
     var dimensionProperty =
       dimension.replace(/./, function(m){ return m[0].toUpperCase() })
 
     $.fn[dimension] = function(value){
       var offset, el = this[0]
+      /*
+       * get
+       * 对window时使用innerWidth/innerHeight
+       * 对document时使用documentElement.scrollWidth/scrollHeight
+       * 其他情况调用offset()中的结果
+       */
       if (value === undefined) return isWindow(el) ? el['inner' + dimensionProperty] :
         isDocument(el) ? el.documentElement['scroll' + dimensionProperty] :
         (offset = this.offset()) && offset[dimension]
+      //set
       else return this.each(function(idx){
         el = $(this)
         el.css(dimension, funcArg(this, value, idx, el[dimension]()))
@@ -1087,12 +1111,19 @@ var Zepto = (function() {
     }
   })
 
+  //遍历节点调用指定方法
   function traverseNode(node, fun) {
     fun(node)
     for (var i = 0, len = node.childNodes.length; i < len; i++)
       traverseNode(node.childNodes[i], fun)
   }
 
+  /* 
+   * 节点插入方法包装
+   * 插入时可以传入一组元素
+   * @tag:2 Generates时会根据顺序进行操作 例如inside = operatorIndex % 2
+   * TODO 有何必要?为何不用 == 判断？
+   */
   // Generate the `after`, `prepend`, `before`, `append`,
   // `insertAfter`, `insertBefore`, `appendTo`, and `prependTo` methods.
   adjacencyOperators.forEach(function(operator, operatorIndex) {
@@ -1102,10 +1133,11 @@ var Zepto = (function() {
       // arguments can be nodes, arrays of nodes, Zepto objects and HTML strings
       var argType, nodes = $.map(arguments, function(arg) {
             argType = type(arg)
+            //如果传入了一组节点。则先去创建fragment
             return argType == "object" || argType == "array" || arg == null ?
               arg : zepto.fragment(arg)
           }),
-          parent, copyByClone = this.length > 1
+          parent, copyByClone = this.length > 1 //目标对象多于1个的时候要多次插入，所以要clone
       if (nodes.length < 1) return this
 
       return this.each(function(_, target){
@@ -1123,8 +1155,10 @@ var Zepto = (function() {
           if (copyByClone) node = node.cloneNode(true)
           else if (!parent) return $(node).remove()
 
+          //使用根据operator转换的target，最后都用insertBefore插入
           parent.insertBefore(node, target)
           if (parentInDocument) traverseNode(node, function(el){
+            //遍历已插入节点，如果是内嵌script则eval执行它
             if (el.nodeName != null && el.nodeName.toUpperCase() === 'SCRIPT' &&
                (!el.type || el.type === 'text/javascript') && !el.src)
               window['eval'].call(window, el.innerHTML)
@@ -1133,6 +1167,7 @@ var Zepto = (function() {
       })
     }
 
+    // 增加 insert* ,*To 调用方式
     // after    => insertAfter
     // prepend  => prependTo
     // before   => insertBefore
@@ -1153,6 +1188,7 @@ var Zepto = (function() {
   return $
 })()
 
+// 非强行的占用$
 // If `$` is not yet defined, point it to `Zepto`
 window.Zepto = Zepto
 window.$ === undefined && (window.$ = Zepto)
