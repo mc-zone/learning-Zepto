@@ -77,12 +77,12 @@
    */
   function ajaxSuccess(data, xhr, settings, deferred) {
     var context = settings.context, status = 'success'
-    settings.success.call(context, data, status, xhr)
-    //是否使用deferred模式
+    settings.success.call(context, data, status, xhr) //执行 success 回调
+    //deferred 对象处理
     if (deferred) deferred.resolveWith(context, [data, status, xhr])
     //全局事件触发
     triggerGlobal(settings, context, 'ajaxSuccess', [xhr, settings, data])
-    //执行ajaxComplete触发
+    //执行ajaxComplete
     ajaxComplete(status, xhr, settings)
   }
   /*
@@ -92,8 +92,9 @@
   // type: "timeout", "error", "abort", "parsererror"
   function ajaxError(error, type, xhr, settings, deferred) {
     var context = settings.context
-    settings.error.call(context, xhr, type, error)
+    settings.error.call(context, xhr, type, error) //执行 error 回调
     if (deferred) deferred.rejectWith(context, [xhr, type, error])
+    //同 ajaxSuccess
     triggerGlobal(settings, context, 'ajaxError', [xhr, settings, error || type])
     ajaxComplete(type, xhr, settings)
   }
@@ -106,7 +107,7 @@
     var context = settings.context
     settings.complete.call(context, xhr, status)
     triggerGlobal(settings, context, 'ajaxComplete', [xhr, settings])
-    ajaxStop(settings)
+    ajaxStop(settings) //尝试执行ajaxStop 回调 (只有是最后一个结束时才能成功)
   }
 
   // 空函数方便赋默认空回调
@@ -114,7 +115,6 @@
   function empty() {}
 
   /* JSONP 方法支持
-   *
    */
   $.ajaxJSONP = function(options, deferred){
     //如果没有设置 options.type 指定类型，则走 $.ajax() 方法
@@ -128,20 +128,24 @@
         _callbackName() : _callbackName) || ('jsonp' + (++jsonpID)),
       //创建新的 script 放置返回内容
       script = document.createElement('script'),
-      //获取在 window 中创建的全局 callback
+      //把用户写在 window 中有名为 callbackName 的全局属性(可能是 function )，保存到 originalCallback 中
       originalCallback = window[callbackName],
+      //用来存储返回的数据
       responseData,
       //提供一个中断方法
       abort = function(errorType) {
         $(script).triggerHandler('error', errorType || 'abort')
       },
-      xhr = { abort: abort }, abortTimeout
+      xhr = { abort: abort },
+      //存储执行超时中断的 setTimeout ID
+      abortTimeout
 
     //deferred 包装
     if (deferred) deferred.promise(xhr)
 
     //为 script 绑定 load 和 error 处理回调
     $(script).on('load error', function(e, errorType){
+      //不再执行超时处理
       clearTimeout(abortTimeout)
       //只要 load 或 error 后，就去掉所有事件并删除 script
       $(script).off().remove()
@@ -154,29 +158,36 @@
         //否则执行 ajaxSuccess
         ajaxSuccess(responseData[0], xhr, options, deferred)
       }
-      //originalCallback 可能变了 重新
+      //还原原来的 window[callbackName] 里的内容
       window[callbackName] = originalCallback
-      //如果 responseData 里有内容了, 传入 originalCallback 中执行
+
+      /* 如果 responseData 里有内容了(加载回来的脚本已经执行了window[callbackName])
+       * 并且原来的 window[callbackName] 即 originalCallback 是(用户定义好的)function
+       * 把 responseData 传入 originalCallback 中执行
+       */
       if (responseData && $.isFunction(originalCallback))
         originalCallback(responseData[0])
       //把 originalCallback 和 responseData 清空
       originalCallback = responseData = undefined
     })
+    // on load error END
 
-    //如果执行 ajaxBeforeSend 失败, 中断
+    //如果执行 ajaxBeforeSend 返回了false, 中断
     if (ajaxBeforeSend(xhr, options) === false) {
       abort('abort')
       return xhr
     }
-    //建立一个存在全局的 callback function
+    //建立一个新的存在 window 下的 callback function
     window[callbackName] = function(){
+      //把 callback 传入的数据存到 responseData
       responseData = arguments
     }
     //给 script 赋上 src ,插入到 head 中
+    //url 中会加入callbackName。把 url 中 ?...jsonp=? 替换成 ?...jsonp=callbackName
     script.src = options.url.replace(/\?(.+)=\?/, '?$1=' + callbackName)
     document.head.appendChild(script)
 
-    //如果有用 options.timeout 设置超时，超时的时候abort中断
+    //如果有用 options.timeout 设置超时，超时的时候 abort 中断
     if (options.timeout > 0) abortTimeout = setTimeout(function(){
       abort('timeout')
     }, options.timeout)
@@ -219,8 +230,10 @@
     crossDomain: false,
     // Default timeout
     timeout: 0,
+    // 是否把要发送的 data 转换为字符串
     // Whether data should be serialized to string
     processData: true,
+    // 是否缓存 GET 响应结果
     // Whether the browser should be allowed to cache GET responses
     cache: true
   }
@@ -237,76 +250,114 @@
   //url query 拼接
   function appendQuery(url, query) {
     if (query == '') return url
+    //正则修正 url query. replace(/[&?]{1,2}/, '?') 把第一次出现的 & 或 ? 或 ?& 替换为 ? ({1,2}代表1或2次)
     return (url + '&' + query).replace(/[&?]{1,2}/, '?')
   }
-  // get 参数序列化
+  // 根据条件判断并进行参数序列化处理
   // serialize payload and append it to the URL for GET requests
   function serializeData(options) {
+    //如果设置需要把 data 序列化为字符串，并且确实传入了 data 且不为字符串，则转化为字符串  
     if (options.processData && options.data && $.type(options.data) != "string")
+      //options.traditional 指定了是否使用 `foo[]=bar&foo[]=baz` 的数组格式
       options.data = $.param(options.data, options.traditional)
+    //如果已有 data 且 type 为 GET (默认也为 GET),则把 data 作为 query 加到 url 上
     if (options.data && (!options.type || options.type.toUpperCase() == 'GET'))
       options.url = appendQuery(options.url, options.data), options.data = undefined
   }
 
   /*
-   * 通用ajax方法
+   * 通用 Ajax 方法
    */
   $.ajax = function(options){
     var settings = $.extend({}, options || {}),
         deferred = $.Deferred && $.Deferred(),
         urlAnchor
+    //填充默认 settings
     for (key in $.ajaxSettings) if (settings[key] === undefined) settings[key] = $.ajaxSettings[key]
 
+    //尝试触发 ajaxStart
     ajaxStart(settings)
 
+    //不允许跨域的情况下
     if (!settings.crossDomain) {
+      //创建一个 a 元素, 地址设置为目标地址
       urlAnchor = document.createElement('a')
       urlAnchor.href = settings.url
-      urlAnchor.href = urlAnchor.href
+      urlAnchor.href = urlAnchor.href //??
+      //判断是否真的跨域了。originAnchor 是指向当前页面地址的 a 元素
       settings.crossDomain = (originAnchor.protocol + '//' + originAnchor.host) !== (urlAnchor.protocol + '//' + urlAnchor.host)
     }
 
+    //如果没有 url ,则向当前页地址发送
     if (!settings.url) settings.url = window.location.toString()
     serializeData(settings)
 
-    var dataType = settings.dataType, hasPlaceholder = /\?.+=\?/.test(settings.url)
+    var dataType = settings.dataType,
+        //检查是否是 jsonp 请求(形如 ?...=? 的url)
+        hasPlaceholder = /\?.+=\?/.test(settings.url)
     if (hasPlaceholder) dataType = 'jsonp'
 
+    /*
+     * 如果settings设置了不缓存
+     * 或没有设置为 true 并且 为script 或 jsonp 类型
+     * 都不走缓存。在url上加上时间戳不走缓存
+     */
     if (settings.cache === false || (
          (!options || options.cache !== true) &&
          ('script' == dataType || 'jsonp' == dataType)
         ))
       settings.url = appendQuery(settings.url, '_=' + Date.now())
 
+    //如果是 jsonp 
     if ('jsonp' == dataType) {
+      //如果url中没有 jsonp参数名=? 的预置项,加上这项
       if (!hasPlaceholder)
         settings.url = appendQuery(settings.url,
+          //如果设置里有 jsonp 参数名则使用，否则使用callback。如果 settings.jsonp 为 false 的话不加(即不用参数)
           settings.jsonp ? (settings.jsonp + '=?') : settings.jsonp === false ? '' : 'callback=?')
+      //转到 $.ajaxJSONP
       return $.ajaxJSONP(settings, deferred)
     }
 
+    //根据 dataType 获取相应的 mimeType
     var mime = settings.accepts[dataType],
+        //Header 头信息
         headers = { },
+        //setHeader 方法
         setHeader = function(name, value) { headers[name.toLowerCase()] = [name, value] },
+        //捕捉协议类型
         protocol = /^([\w-]+:)\/\//.test(settings.url) ? RegExp.$1 : window.location.protocol,
+        //新建 XHR 对象
         xhr = settings.xhr(),
+        //原生设置请求头方法
         nativeSetHeader = xhr.setRequestHeader,
+        //超时中断的 timeOutID
         abortTimeout
 
+    //deferred 操作
     if (deferred) deferred.promise(xhr)
 
+    //如果不跨域,标明 X-Requested-With 请求类型是 XMLHttpRequest
     if (!settings.crossDomain) setHeader('X-Requested-With', 'XMLHttpRequest')
+    //接受的格式
     setHeader('Accept', mime || '*/*')
+    //在有指定 mimeType 的情况下尝试主动设置响应的 mimeType 要求 (overrideMimeType)
     if (mime = settings.mimeType || mime) {
+      //如果以逗号隔开的形式多于一个，留下第一个
       if (mime.indexOf(',') > -1) mime = mime.split(',', 2)[0]
+      //overrideMimeType 主动指定要求返回的 mimeType
       xhr.overrideMimeType && xhr.overrideMimeType(mime)
     }
+    //请求的 Content-type 设置。未设置情况下设为 application/x-www-form-urlencoded 兼顾所有情况
     if (settings.contentType || (settings.contentType !== false && settings.data && settings.type.toUpperCase() != 'GET'))
       setHeader('Content-Type', settings.contentType || 'application/x-www-form-urlencoded')
 
+    //settings中指定的头信息
     if (settings.headers) for (name in settings.headers) setHeader(name, settings.headers[name])
+    //覆写 setHeader 到 xhr.setRequestHeader (原来的已经有保存到nativeSetHeader)
     xhr.setRequestHeader = setHeader
 
+    //readyStateChange 事件处理
     xhr.onreadystatechange = function(){
       if (xhr.readyState == 4) {
         xhr.onreadystatechange = empty
@@ -440,3 +491,4 @@
     return params.join('&').replace(/%20/g, '+')
   }
 })(Zepto)
+
