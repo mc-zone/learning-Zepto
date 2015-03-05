@@ -355,58 +355,78 @@
     //settings中指定的头信息
     if (settings.headers) for (name in settings.headers) setHeader(name, settings.headers[name])
     //覆写 setHeader 到 xhr.setRequestHeader (原来的已经有保存到nativeSetHeader)
+    //TODO why?
     xhr.setRequestHeader = setHeader
 
-    //readyStateChange 事件处理
+    //readyStateChange 事件处理 handler
     xhr.onreadystatechange = function(){
+      //返回 response 时
       if (xhr.readyState == 4) {
+        //先置空 handler
         xhr.onreadystatechange = empty
+        //取消超时处理
         clearTimeout(abortTimeout)
         var result, error = false
+        
+        //在以下状态中认为是可能成功的
         if ((xhr.status >= 200 && xhr.status < 300) || xhr.status == 304 || (xhr.status == 0 && protocol == 'file:')) {
+          //加入对 response 中 contentType 的考虑，重新判断 dataType
           dataType = dataType || mimeToDataType(settings.mimeType || xhr.getResponseHeader('content-type'))
+          //result 默认置为 responseText
           result = xhr.responseText
 
           try {
+            // 如果是 script 使用 eval 执行
             // http://perfectionkills.com/global-eval-what-are-the-options/
             if (dataType == 'script')    (1,eval)(result)
+            //xml responseXML
             else if (dataType == 'xml')  result = xhr.responseXML
+            //JSON 返回, 调用$.parseJSON
             else if (dataType == 'json') result = blankRE.test(result) ? null : $.parseJSON(result)
           } catch (e) { error = e }
 
+          //都不符合的情况下，抛出解析错误
           if (error) ajaxError(error, 'parsererror', xhr, settings, deferred)
+          //执行 ajaxSuccess
           else ajaxSuccess(result, xhr, settings, deferred)
         } else {
+          //错误
           ajaxError(xhr.statusText || null, xhr.status ? 'error' : 'abort', xhr, settings, deferred)
         }
       }
     }
 
+    //如果 ajaxBeforeSend 中返回了false，直接终止，不执行
     if (ajaxBeforeSend(xhr, settings) === false) {
       xhr.abort()
       ajaxError(null, 'abort', xhr, settings, deferred)
       return xhr
     }
 
+    // xhr 属性设置
     if (settings.xhrFields) for (name in settings.xhrFields) xhr[name] = settings.xhrFields[name]
 
+    //默认异步
     var async = 'async' in settings ? settings.async : true
     xhr.open(settings.type, settings.url, async, settings.username, settings.password)
 
+    //开始设置头信息
     for (name in headers) nativeSetHeader.apply(xhr, headers[name])
 
+    //超时设置
     if (settings.timeout > 0) abortTimeout = setTimeout(function(){
         xhr.onreadystatechange = empty
         xhr.abort()
         ajaxError(null, 'timeout', xhr, settings, deferred)
       }, settings.timeout)
 
+    // 发送
     // avoid sending empty string (#319)
     xhr.send(settings.data ? settings.data : null)
     return xhr
   }
 
-  // 参数解析
+  // 对 $.get, $.post 等几个别名方法的 arguments 参数解析，转为调用 $.ajax 的参数
   // handle optional data/success arguments
   function parseArguments(url, data, success, dataType) {
     if ($.isFunction(data)) dataType = success, success = data, data = undefined
@@ -420,7 +440,7 @@
   }
 
   /*
-   * 以下一些高级方法
+   * 以下一些别名方法
    * 对参数和条件分析处理后通过 $.ajax 实现
    */
   //$.get 方法 
@@ -440,19 +460,32 @@
     return $.ajax(options)
   }
 
-  //load 内容到元素
+  /*
+   * 实例方法 load 内容到元素
+   * 第一参数 url 可以尾部空格加上 selector 指定要写入的确切内容
+   * 如"http://google.com #container"
+   * 仅在获得内容后 find。Ajax 加载时仍然加载整个文档
+   */
   $.fn.load = function(url, data, success){
     if (!this.length) return this
-    var self = this, parts = url.split(/\s/), selector,
+    var self = this,
+        //分解 url。可能含有空格隔开的 selector
+        parts = url.split(/\s/), selector,
         options = parseArguments(url, data, success),
+        //保存原有的success callback
         callback = options.success
+    //取出 selector
     if (parts.length > 1) options.url = parts[0], selector = parts[1]
     options.success = function(response){
+      //设置成功后的 callback 为调用 .html() 方法写入内容
       self.html(selector ?
+        //有选择器的情况下，response 过滤掉<script>元素后作为一个 div 的 HTML 将其新建。再 find(selector)
         $('<div>').html(response.replace(rscript, "")).find(selector)
         : response)
+      //继续把原来的 success callback 执行
       callback && callback.apply(self, arguments)
     }
+    //调用 $.ajax 方法
     $.ajax(options)
     return this
   }
@@ -460,7 +493,11 @@
   //url 参数 encode
   var escape = encodeURIComponent
 
-  //序列化
+  /*
+   * $.param 方法的辅助函数
+   * 将传入的 obj 遍历转化为字符串结构放入 params 数组中
+   * 最后将在 $.param 中被拼接为 URL query 返回
+   */
   function serialize(params, obj, traditional, scope){
     var type, array = $.isArray(obj), hash = $.isPlainObject(obj)
     $.each(obj, function(key, value) {
@@ -477,18 +514,25 @@
   }
 
   /*
-   * URL 参数 build 方法，把传入的对象序列化成 url query 的格式。
-   * 如果 traditional 参数传入了true，数组参数将不会被改成 []= 的形式
+   * 把传入的对象序列化成 URL query 的格式
+   * obj 中的 value 值可以为字符串、数组、对象和带返回值的function
+   * 如果 traditional 参数传入了true，数组和对象将不会被改成 []= 和 [key]= 的形式(在 serialize() 中处理)
+   * 例如:
+   *   数组 a:[1,2,3] 转为a[]=1&a[]=2&a[]=3, traditional 为 true 时则为 a=1&a=2&2=3
+   *   对象 foo:{bar:'baz'} 转为 foo[bar]=baz, traditional 为 true 时则为 foo=[object+Object]
+   *   ( 详细在 serialize() 函数中实现 )
    */
   $.param = function(obj, traditional){
     var params = []
+    //给params 预置一个 add 方法，在 serialize() 中入栈数据时调用
     params.add = function(key, value) {
-      if ($.isFunction(value)) value = value()
+      if ($.isFunction(value)) value = value() //value 可以为 function
       if (value == null) value = ""
-      this.push(escape(key) + '=' + escape(value))
+      this.push(escape(key) + '=' + escape(value)) //URL 编码（使用encodeURIComponent）
     }
+    //通过 serialize() 函数处理数据
     serialize(params, obj, traditional)
-    return params.join('&').replace(/%20/g, '+')
+    return params.join('&').replace(/%20/g, '+')//空格最后被过滤为+
   }
 })(Zepto)
 
