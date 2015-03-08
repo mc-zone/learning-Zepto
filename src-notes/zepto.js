@@ -87,7 +87,7 @@ var Zepto = (function() {
     //没有父节点，使用临时div
     if (temp) (parent = tempParent).appendChild(element)
     //使用qsa选择出匹配元素,取element在其中的索引,~按位非(即-1时为0, 0时为-1, 1时为-2)
-    //TODO 使用~按位非的目的
+    //当没有匹配时为0（~-1）其他情况大于0（转Boolean值为true）.
     match = ~zepto.qsa(parent, selector).indexOf(element)
     //清空tempParent(临时div)
     temp && tempParent.removeChild(element)
@@ -183,9 +183,11 @@ var Zepto = (function() {
   }
 
   /*
-   * Zepto的DOM fragment
-   * 根据string创建DOM元素
+   * Zepto的 DOM fragment
+   * 根据 string 创建 DOM fragment （类似于document.createDocumentFragment，创建文档碎片集，减少插入次数）
+   * 与 createDocumentFragment 不同点在于使用 innerHTML()。 因此直接传入 HTML string 即可
    * properties对象可传入一组设置集合(对应methodAttributes中的方法或HTML属性名),用于设置元素的初始属性
+   * 最后返回一个包含所有创建的 Zepto DOM 元素集的数组
    */
   // `$.zepto.fragment` takes a html string and an optional tag name
   // to generate DOM nodes nodes from the given html string.
@@ -203,29 +205,32 @@ var Zepto = (function() {
     if (!dom) {
       //展开缩写元素，形如:<div/> 转化为 <div></div>
       if (html.replace) html = html.replace(tagExpanderRE, "<$1></$2>")
-      //默认外层元素，为空时设为string中的第一个标签元素
-      //TODO 使用机制 什么时候有name?
+      /*
+       * 使用一个临时容器做父元素，方便使用 innerHTML 生成 DOM 和 childNodes 遍历元素
+       * 为空时设为string中的第一个标签元素
+       */
       if (name === undefined) name = fragmentRE.test(html) && RegExp.$1
-      //到containers中找创建好的顶级容器
-      //默认使用*,containers['*'] = div
+      //到containers中找创建好的容器
+      //默认使用*，（containers['*'] = div）
       if (!(name in containers)) name = '*'
 
-      //借用.innerHTML方法创建DOM树
+      //用 .innerHTML 方法设置 HTML 内容在临时容器中
       container = containers[name]
       container.innerHTML = '' + html
-      //返回创建的元素，并清空container
+      //返回创建的元素的数组，并清空容器
       dom = $.each(slice.call(container.childNodes), function(){
         container.removeChild(this)
       })
     }
 
-    //按照传入的合法对象集(进检测isPlainObject)，执行
+    //按照传入的合法对象集(进isPlainObject检测)，执行属性设置
     if (isPlainObject(properties)) {
+      //包装 zepto dom
       nodes = $(dom)
       $.each(properties, function(key, value) {
-        //存在方法则调用set
+        //methodAttributes 存在方法则调用方法设置 value
         if (methodAttributes.indexOf(key) > -1) nodes[key](value)
-        //不存在此方法，则认为是使用属性名设置，使用.attr()
+        //不存在方法，则使用.attr()
         else nodes.attr(key, value)
       })
     }
@@ -259,6 +264,8 @@ var Zepto = (function() {
 
   /*
    * Zepto初始方法，包含一些特定情况和用法
+   * 1.传入选择器时从指定上下文或document中选择元素包装返回
+   * 2.传入 HTML 时创建 DOM 元素
    */
   // `$.zepto.init` is Zepto's counterpart to jQuery's `$.fn.init` and
   // takes a CSS selector and an optional context (and handles various
@@ -266,41 +273,45 @@ var Zepto = (function() {
   // This method can be overriden in plugins.
   zepto.init = function(selector, context) {
     var dom
+    // 空参数时，返回一个空的 Zepto 集合
     // If nothing given, return an empty Zepto collection
     if (!selector) return zepto.Z()
+    // 如果 selector 是字符串时
     // Optimize for string selectors
     else if (typeof selector == 'string') {
       selector = selector.trim()
-      // 如果传入的第一参数字符以<开头并且是标签,则调用zepto.fragment建立dom
+      // 如果传入的第一参数字符以<开头并且是标签(通过fragmentRE验证),则调用zepto.fragment建立dom
+      // (不以<开头的 HTML 作为 DOM 内容在某些环境下报错 Dom error 12)
       // If it's a html fragment, create nodes from it
       // Note: In both Chrome 21 and Firefox 15, DOM error 12
       // is thrown if the fragment doesn't begin with <
       if (selector[0] == '<' && fragmentRE.test(selector))
         dom = zepto.fragment(selector, RegExp.$1, context), selector = null
+      // 否则如果传入了context上下文，则从其中搜索节点
       // If there's a context, create a collection on that context first, and select
       // nodes from there
-      // 另外，如果传入了context上下文，则从其中搜索节点
       else if (context !== undefined) return $(context).find(selector)
+      // 否则使用选择器在document中搜索元素
       // If it's a CSS selector, use it to select nodes.
-      // 使用选择器全局搜索元素
       else dom = zepto.qsa(document, selector)
     }
-    //如果传入的是function，则当做ready回调调用
+    // 否则如果selector传入的function，则当做ready回调注册
     // If a function is given, call it when the DOM is ready
     else if (isFunction(selector)) return $(document).ready(selector)
-    // 传入Zepto对象则简单的返回
+    // 否则如果传入Zepto对象则简单的返回(避免重复包装)
     // If a Zepto collection is given, just return it
     else if (zepto.isZ(selector)) return selector
+    //其他情况
     else {
       // 如果传入数组则去除空值后放入dom变量(等待处理)
       // normalize array if an array of nodes is given
       if (isArray(selector)) dom = compact(selector)
+      // 否则如果单个元素则用数组包含
       // Wrap DOM nodes.
-      //如果单个元素则用数组包含
       else if (isObject(selector))
         dom = [selector], selector = null
-      // 如果是html fragment,则创建
-      // TODO 此时selector应该不是string 怎么走到此？
+      // 否则如果是html fragment,则创建
+      // TODO 此时走到这里 selector 应该不是 string 怎么还会是fragment？
       // If it's a html fragment, create nodes from it
       else if (fragmentRE.test(selector))
         dom = zepto.fragment(selector.trim(), RegExp.$1, context), selector = null
@@ -310,6 +321,7 @@ var Zepto = (function() {
       // And last but no least, if it's a CSS selector, use it to select nodes.
       else dom = zepto.qsa(document, selector)
     }
+    // 创建 Zepto 元素集返回
     // create a new Zepto collection from the nodes found
     return zepto.Z(dom, selector)
   }
@@ -418,8 +430,8 @@ var Zepto = (function() {
   }
 
   /*
-   * 返回节点的className
-   * TODO 注释说在符合SVGAnimatedString的情况下。即元素可以animate的情况下。为何?
+   * 设置节点的 className 或返回节点的 className
+   * 兼容 svg,svg 使用 baseVal
    */
   // access className property while respecting SVGAnimatedString
   function className(node, value){
